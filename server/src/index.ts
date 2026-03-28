@@ -1,5 +1,5 @@
 import { WebSocketServer, WebSocket } from 'ws';
-import type { User, Game, RegData, CreateGameData, JoinGameData, Player } from './types';
+import type { User, Game, RegData, CreateGameData, JoinGameData, StartGameData, AnswerData, Player } from './types';
 import { generateUserId, generateGameId, generateGameCode } from './utils/generators';
 import { sendMessage, parseMessage, broadcastToGame } from './utils/message';
 import {
@@ -8,6 +8,7 @@ import {
   validateGameCode,
   isPlayerInGame,
 } from './utils/validation';
+import { broadcastQuestion, endQuestion, checkAllPlayersAnswered } from './utils/game';
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 
@@ -151,6 +152,112 @@ const handleJoinGame = (ws: WebSocket, data: any): void => {
   console.log(`Player ${user.name} joined game ${code}`);
 };
 
+const handleStartGame = (ws: WebSocket, data: any): void => {
+  const userValidation = validateUserLoggedIn(wsToUserId, users, ws);
+  if (!userValidation.valid) {
+    sendMessage(ws, 'error', { message: userValidation.error });
+    return;
+  }
+
+  const { gameId } = data as StartGameData;
+  if (!gameId) {
+    sendMessage(ws, 'error', { message: 'Game ID required' });
+    return;
+  }
+
+  const game = games.get(gameId);
+  if (!game) {
+    sendMessage(ws, 'error', { message: 'Game not found' });
+    return;
+  }
+
+  const user = userValidation.user!;
+  if (game.hostId !== user.index) {
+    sendMessage(ws, 'error', { message: 'Only host can start the game' });
+    return;
+  }
+
+  if (game.status !== 'waiting') {
+    sendMessage(ws, 'error', { message: 'Game already started' });
+    return;
+  }
+
+  game.status = 'in_progress';
+  broadcastQuestion(game);
+
+  console.log(`Game ${game.code} started by ${user.name}`);
+};
+
+const handleAnswer = (ws: WebSocket, data: any): void => {
+  const userValidation = validateUserLoggedIn(wsToUserId, users, ws);
+  if (!userValidation.valid) {
+    sendMessage(ws, 'error', { message: userValidation.error });
+    return;
+  }
+
+  const { gameId, questionIndex, answerIndex } = data as AnswerData;
+
+  if (gameId === undefined || questionIndex === undefined || answerIndex === undefined) {
+    sendMessage(ws, 'error', { message: 'Missing required fields' });
+    return;
+  }
+
+  const game = games.get(gameId);
+  if (!game) {
+    sendMessage(ws, 'error', { message: 'Game not found' });
+    return;
+  }
+
+  if (game.status !== 'in_progress') {
+    sendMessage(ws, 'error', { message: 'Game is not in progress' });
+    return;
+  }
+
+  const user = userValidation.user!;
+  const player = game.players.find(p => p.index === user.index);
+
+  if (!player) {
+    sendMessage(ws, 'error', { message: 'Player not in game' });
+    return;
+  }
+
+  if (player.index === game.hostId) {
+    sendMessage(ws, 'error', { message: 'Host cannot submit answers' });
+    return;
+  }
+
+  if (questionIndex !== game.currentQuestion) {
+    sendMessage(ws, 'error', { message: 'Invalid question index' });
+    return;
+  }
+
+  if (game.playerAnswers.has(player.index)) {
+    sendMessage(ws, 'error', { message: 'Already answered this question' });
+    return;
+  }
+
+  const currentQuestion = game.questions[game.currentQuestion];
+  if (answerIndex < 0 || answerIndex >= currentQuestion.options.length) {
+    sendMessage(ws, 'error', { message: 'Invalid answer index' });
+    return;
+  }
+
+  game.playerAnswers.set(player.index, {
+    answerIndex,
+    timestamp: Date.now(),
+  });
+
+  player.hasAnswered = true;
+
+  sendMessage(ws, 'answer_accepted', { questionIndex });
+
+  if (checkAllPlayersAnswered(game)) {
+    endQuestion(game);
+  }
+
+  console.log(`Player ${user.name} answered question ${questionIndex + 1} in game ${game.code}`);
+};
+
 const handleMessage = (ws: WebSocket, rawMessage: string): void => {
   const message = parseMessage(rawMessage);
 
@@ -169,6 +276,12 @@ const handleMessage = (ws: WebSocket, rawMessage: string): void => {
         break;
       case 'join_game':
         handleJoinGame(ws, message.data);
+        break;
+      case 'start_game':
+        handleStartGame(ws, message.data);
+        break;
+      case 'answer':
+        handleAnswer(ws, message.data);
         break;
       default:
         sendMessage(ws, 'error', { message: 'Unknown message type' });
