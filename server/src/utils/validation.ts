@@ -63,9 +63,79 @@ export const isPlayerInGame = (
   userId: string
 ): Game | null => {
   for (const game of games.values()) {
-    if (game.players.some(player => player.index === userId)) {
+    if (game.status !== 'finished' && game.players.some(player => player.index === userId)) {
       return game;
     }
   }
   return null;
+};
+
+export const validateIsHost = (
+  game: Game,
+  userId: string
+): { valid: boolean; error?: string } => {
+  if (game.hostId !== userId) {
+    return { valid: false, error: 'Only host can perform this action' };
+  }
+  return { valid: true };
+};
+
+export const validateGameState = (
+  game: Game,
+  expectedStatus: 'waiting' | 'in_progress' | 'finished'
+): { valid: boolean; error?: string } => {
+  if (game.status !== expectedStatus) {
+    return {
+      valid: false,
+      error: `Game must be in ${expectedStatus} state`,
+    };
+  }
+  return { valid: true };
+};
+
+export const validateAnswerData = (
+  data: any
+): { valid: boolean; error?: string } => {
+  if (
+    data.gameId === undefined ||
+    data.questionIndex === undefined ||
+    data.answerIndex === undefined
+  ) {
+    return { valid: false, error: 'Missing required fields' };
+  }
+
+  if (
+    typeof data.gameId !== 'string' ||
+    typeof data.questionIndex !== 'number' ||
+    typeof data.answerIndex !== 'number'
+  ) {
+    return { valid: false, error: 'Invalid data types' };
+  }
+
+  if (data.questionIndex < 0 || data.answerIndex < 0) {
+    return { valid: false, error: 'Indices must be non-negative' };
+  }
+
+  return { valid: true };
+};
+
+export const validateQuestionIndex = (
+  game: Game,
+  questionIndex: number
+): { valid: boolean; error?: string } => {
+  if (questionIndex !== game.currentQuestion) {
+    return { valid: false, error: 'Invalid question index' };
+  }
+  return { valid: true };
+};
+
+export const validateAnswerIndex = (
+  game: Game,
+  answerIndex: number
+): { valid: boolean; error?: string } => {
+  const currentQuestion = game.questions[game.currentQuestion];
+  if (answerIndex < 0 || answerIndex >= currentQuestion.options.length) {
+    return { valid: false, error: 'Invalid answer index' };
+  }
+  return { valid: true };
 };
